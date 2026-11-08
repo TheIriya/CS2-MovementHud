@@ -1,5 +1,5 @@
 # 中文移动 HUD 与检查点插件
-
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat)](http://choosealicense.com/licenses/mit/)<br>
 适用于 CS2 的 MG、Surf、BHOP 服务器，基于 [CounterStrikeSharp](https://github.com/roflmuffin/counterstrikesharp)。
 
 ## HUD
