@@ -4,6 +4,7 @@
 
 ## HUD
 
+![alt text](image.png)
 - 显示玩家速度和 A/W/S/D/C/Jump 按键状态。
 - 观察其他玩家时显示其速度和按键状态。
 - `!panel`、`/panel` 或控制台命令 `css_panel` 可切换 HUD。
