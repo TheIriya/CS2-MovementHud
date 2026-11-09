@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json;
@@ -5,7 +6,9 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Modules.UserMessages;
 using CounterStrikeSharp.API.Modules.Utils;
+using Microsoft.Extensions.Logging;
 
 namespace MovementHud;
 
@@ -21,6 +24,8 @@ public sealed class MovementHudPlugin : BasePlugin
     private readonly Dictionary<ulong, List<Checkpoint>> _checkpoints = new();
     private readonly Dictionary<ulong, int> _jumpVisibleUntil = new();
     private readonly HashSet<ulong> _hudDisabled = new();
+    private HashSet<ulong> _legsHidden = new();
+    private readonly HashSet<(IntPtr Player, string Command)> _pendingChatCommands = new();
     private readonly Dictionary<IntPtr, (CCSWeaponBaseVData Data, float Primary, float Secondary)> _weaponSpeeds = new();
     private MovementHudConfig _config = new();
     private int _tick;
@@ -31,30 +36,42 @@ public sealed class MovementHudPlugin : BasePlugin
         "mh_checkpoints", "Enable checkpoint save and teleport commands", true);
 
     private string ConfigPath => Path.Combine(ModuleDirectory, "movementhud.json");
+    private string HiddenLegsPath => Path.Combine(ModuleDirectory, "movementhud-hidelegs.json");
 
     public override string ModuleName => "Movement HUD and Checkpoint";
-    public override string ModuleVersion => "1.3.2";
+    public override string ModuleVersion => "1.4.1";
     public override string ModuleAuthor => "TheIriya";
     public override string ModuleDescription => "Speed, key press HUD, and checkpoint plugin";
 
     public override void Load(bool hotReload)
     {
         LoadConfig();
+        LoadHiddenLegs();
         RegisterFakeConVars(this);
         RegisterListener<Listeners.OnTick>(OnTick);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
         RegisterListener<Listeners.OnMapEnd>(RestoreWeaponSpeeds);
-        AddCommand("css_cp", "保存检查点", SaveCheckpointCommand);
-        AddCommand("css_tp", "读取最近检查点", TeleportCheckpointCommand);
-        AddCommand("css_tp1", "读取第一个检查点", TeleportCheckpoint1Command);
-        AddCommand("css_tp2", "读取第二个检查点", TeleportCheckpoint2Command);
-        AddCommand("css_panel", "开关移动 HUD", PanelCommand);
+        AddCommand("css_cp", "保存检查点", (player, command) => OnPlayerCommand(player, command, "cp"));
+        AddCommand("css_tp", "读取最近检查点", (player, command) => OnPlayerCommand(player, command, "tp"));
+        AddCommand("css_tp1", "读取上一个检查点", (player, command) => OnPlayerCommand(player, command, "tp1"));
+        AddCommand("css_tp2", "读取上上个检查点", (player, command) => OnPlayerCommand(player, command, "tp2"));
+        AddCommand("css_panel", "开关移动 HUD", (player, command) => OnPlayerCommand(player, command, "panel"));
+        AddCommand("css_hidelegs", "开关隐藏腿", (player, command) => OnPlayerCommand(player, command, "hidelegs"));
         AddCommand("css_movementhud_reload", "重载移动 HUD 配置", ReloadConfigCommand);
         AddCommandListener("say", OnSayCommand, HookMode.Pre);
         AddCommandListener("say_team", OnSayCommand, HookMode.Pre);
+        HookUserMessage(118, OnChatMessage, HookMode.Pre); // CS_UM_SayText2
     }
 
-    public override void Unload(bool hotReload) => RestoreWeaponSpeeds();
+    public override void Unload(bool hotReload)
+    {
+        RestoreWeaponSpeeds();
+        foreach (var player in Utilities.GetPlayers())
+        {
+            if (IsUsable(player) && _legsHidden.Contains(player.SteamID))
+                ApplyLegVisibility(player, false);
+        }
+    }
 
     private void OnTick()
     {
@@ -66,6 +83,8 @@ public sealed class MovementHudPlugin : BasePlugin
                 continue;
 
             ApplyMovementSpeed(player);
+            if (_legsHidden.Contains(player.SteamID))
+                ApplyLegVisibility(player, true);
 
             if (_hudDisabled.Contains(player.SteamID))
                 continue;
@@ -131,6 +150,73 @@ public sealed class MovementHudPlugin : BasePlugin
         command.ReplyToCommand("[HUD] 配置已重载");
     }
 
+    private void LoadHiddenLegs()
+    {
+        try
+        {
+            if (File.Exists(HiddenLegsPath))
+                _legsHidden = JsonSerializer.Deserialize<HashSet<ulong>>(File.ReadAllText(HiddenLegsPath)) ?? new();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Logger.LogError(ex, "无法读取隐藏腿设置：{Path}", HiddenLegsPath);
+        }
+    }
+
+    private bool SaveHiddenLegs()
+    {
+        try
+        {
+            var temporaryPath = HiddenLegsPath + ".tmp";
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(_legsHidden));
+            File.Move(temporaryPath, HiddenLegsPath, true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Logger.LogError(ex, "无法保存隐藏腿设置：{Path}", HiddenLegsPath);
+            return false;
+        }
+    }
+
+    private static void ApplyLegVisibility(CCSPlayerController player, bool hidden)
+    {
+        if (!player.PawnIsAlive || player.PlayerPawn.Value is not { IsValid: true } pawn)
+            return;
+
+        var color = pawn.Render;
+        var alpha = hidden ? 254 : 255;
+        if (color.A == alpha)
+            return;
+
+        // CS2 hides the first-person legs when the player model is not fully opaque.
+        pawn.Render = Color.FromArgb(alpha, color.R, color.G, color.B);
+        Utilities.SetStateChanged(pawn, "CBaseModelEntity", "m_clrRender");
+    }
+
+    private void ToggleHideLegs(CCSPlayerController player)
+    {
+        if (!IsUsable(player) || player.IsBot || player.SteamID == 0)
+            return;
+
+        var hidden = _legsHidden.Add(player.SteamID);
+        if (!hidden)
+            _legsHidden.Remove(player.SteamID);
+
+        if (!SaveHiddenLegs())
+        {
+            if (hidden)
+                _legsHidden.Remove(player.SteamID);
+            else
+                _legsHidden.Add(player.SteamID);
+            player.PrintToChat("\x02[隐藏腿] 设置保存失败，请稍后重试。");
+            return;
+        }
+
+        ApplyLegVisibility(player, hidden);
+        player.PrintToChat(hidden ? "\x04[隐藏腿] 已隐藏" : "\x04[隐藏腿] 已显示");
+    }
+
     private void ApplyMovementSpeed(CCSPlayerController player)
     {
         if (!Enable260Speed.Value)
@@ -168,7 +254,7 @@ public sealed class MovementHudPlugin : BasePlugin
         _weaponSpeeds.Clear();
     }
 
-    private void SaveCheckpointCommand(CCSPlayerController? player, CommandInfo command)
+    private void OnPlayerCommand(CCSPlayerController? player, CommandInfo command, string name)
     {
         if (player is null)
         {
@@ -176,97 +262,97 @@ public sealed class MovementHudPlugin : BasePlugin
             return;
         }
 
-        SaveCheckpoint(player);
+        if (command.CallingContext == CommandCallingContext.Chat)
+            QueueChatCommand(player, name);
+        else
+            ExecutePlayerCommand(player, name);
     }
 
-    private void TeleportCheckpointCommand(CCSPlayerController? player, CommandInfo command)
-    {
-        if (player is null)
-        {
-            command.ReplyToCommand("该命令只能由玩家使用。");
-            return;
-        }
-
-        TeleportCheckpoint(player);
-    }
-
-    private void TeleportCheckpoint1Command(CCSPlayerController? player, CommandInfo command)
-    {
-        if (player is null)
-        {
-            command.ReplyToCommand("该命令只能由玩家使用。");
-            return;
-        }
-
-        TeleportCheckpoint(player, 1);
-    }
-
-    private void TeleportCheckpoint2Command(CCSPlayerController? player, CommandInfo command)
-    {
-        if (player is null)
-        {
-            command.ReplyToCommand("该命令只能由玩家使用。");
-            return;
-        }
-
-        TeleportCheckpoint(player, 2);
-    }
-
-    private void PanelCommand(CCSPlayerController? player, CommandInfo command)
-    {
-        if (player is null)
-        {
-            command.ReplyToCommand("该命令只能由玩家使用。");
-            return;
-        }
-
-        ToggleHud(player);
-    }
-
-    private void ToggleHud(CCSPlayerController player, bool silent = false)
+    private void ToggleHud(CCSPlayerController player)
     {
         var enabled = _hudDisabled.Remove(player.SteamID);
-        if (!silent)
-            player.PrintToChat(enabled ? "\x04[HUD] 已开启" : "\x04[HUD] 已关闭");
+        player.PrintToChat(enabled ? "\x04[HUD] 已开启" : "\x04[HUD] 已关闭");
         if (!enabled)
             _hudDisabled.Add(player.SteamID);
     }
 
     private HookResult OnSayCommand(CCSPlayerController? player, CommandInfo command)
     {
-        var text = command.ArgString.Trim().Trim('"');
-        if (player is null || text.Length < 2)
+        if (player is null || !TryParseChatCommand(command.ArgString, out var name))
             return HookResult.Continue;
 
-        var lower = text.ToLowerInvariant();
-        var silent = lower.StartsWith("!!", StringComparison.Ordinal);
-        var prefixLength = silent ? 2 : 1;
-        if (!silent && lower[0] is not ('!' or '/' or '.'))
-            return HookResult.Continue;
-        var body = lower[prefixLength..];
+        QueueChatCommand(player, name);
+        return HookResult.Stop;
+    }
 
-        switch (body)
+    private HookResult OnChatMessage(UserMessage message)
+    {
+        if (!TryParseChatCommand(message.ReadString("param2"), out var name))
+            return HookResult.Continue;
+
+        // Some chat paths bypass the say listener. Block the outgoing chat itself too.
+        var player = Utilities.GetPlayerFromIndex(message.ReadInt("entityindex"));
+        if (player is not null)
+            QueueChatCommand(player, name);
+        message.Recipients.Clear();
+        return HookResult.Stop;
+    }
+
+    private static bool TryParseChatCommand(string text, out string name)
+    {
+        name = "";
+        var lower = text.Trim().Trim('"').Trim().ToLowerInvariant();
+        if (lower.Length < 2)
+            return false;
+
+        var doublePrefix = lower.StartsWith("!!", StringComparison.Ordinal);
+        var prefixLength = doublePrefix ? 2 : 1;
+        if (!doublePrefix && lower[0] is not ('!' or '/' or '.'))
+            return false;
+
+        name = lower[prefixLength..].Trim();
+        return name is "panel" or "hidelegs" or "cp" or "tp" or "tp1" or "tp2";
+    }
+
+    private void QueueChatCommand(CCSPlayerController player, string name)
+    {
+        var key = (player.Handle, name);
+        // The say hook, outgoing chat, and CSS chat dispatch may see the same command.
+        if (!_pendingChatCommands.Add(key))
+            return;
+
+        Server.NextFrame(() =>
         {
-            case "panel": ToggleHud(player, silent); return HookResult.Handled;
-            case "cp": SaveCheckpoint(player, silent); return HookResult.Handled;
-            case "tp": TeleportCheckpoint(player, 0, silent); return HookResult.Handled;
-            case "tp1": TeleportCheckpoint(player, 1, silent); return HookResult.Handled;
-            case "tp2": TeleportCheckpoint(player, 2, silent); return HookResult.Handled;
-            default: return HookResult.Continue;
+            _pendingChatCommands.Remove(key);
+            if (IsUsable(player))
+                ExecutePlayerCommand(player, name);
+        });
+    }
+
+    private void ExecutePlayerCommand(CCSPlayerController player, string name)
+    {
+        switch (name)
+        {
+            case "panel": ToggleHud(player); break;
+            case "hidelegs": ToggleHideLegs(player); break;
+            case "cp": SaveCheckpoint(player); break;
+            case "tp": TeleportCheckpoint(player); break;
+            case "tp1": TeleportCheckpoint(player, 1); break;
+            case "tp2": TeleportCheckpoint(player, 2); break;
         }
     }
 
-    private void SaveCheckpoint(CCSPlayerController player, bool silent = false)
+    private void SaveCheckpoint(CCSPlayerController player)
     {
         if (!EnableCheckpoints.Value)
         {
-            if (!silent) player.PrintToChat("\x02[检查点] 此地图不能使用存点功能。");
+            player.PrintToChat("\x02[检查点] 此地图不能使用存点功能。");
             return;
         }
 
         if (!TryGetCheckpointPawn(player, out var pawn))
         {
-            if (!silent) player.PrintToChat("\x02[检查点] 只有存活状态才能存点。");
+            player.PrintToChat("\x02[检查点] 只有存活状态才能存点。");
             return;
         }
 
@@ -275,7 +361,7 @@ public sealed class MovementHudPlugin : BasePlugin
         var velocity = pawn.AbsVelocity;
         if (origin is null || rotation is null || velocity is null)
         {
-            if (!silent) player.PrintToChat("\x02[检查点] 无法读取当前位置。");
+            player.PrintToChat("\x02[检查点] 无法读取当前位置。");
             return;
         }
 
@@ -288,26 +374,26 @@ public sealed class MovementHudPlugin : BasePlugin
             new Vector3(origin.X, origin.Y, origin.Z),
             new Vector3(rotation.X, rotation.Y, rotation.Z),
             new Vector3(velocity.X, velocity.Y, velocity.Z)));
-        if (!silent) player.PrintToChat("\x04[检查点] 存点成功");
+        player.PrintToChat("\x04[检查点] 存点成功");
     }
 
-    private void TeleportCheckpoint(CCSPlayerController player, int number = 0, bool silent = false)
+    private void TeleportCheckpoint(CCSPlayerController player, int number = 0)
     {
         if (!EnableCheckpoints.Value)
         {
-            if (!silent) player.PrintToChat("\x02[检查点] 此地图不能使用存点功能。");
+            player.PrintToChat("\x02[检查点] 此地图不能使用存点功能。");
             return;
         }
 
         if (!TryGetCheckpointPawn(player, out var pawn))
         {
-            if (!silent) player.PrintToChat("\x02[检查点] 只有存活状态才能读点。");
+            player.PrintToChat("\x02[检查点] 只有存活状态才能读点。");
             return;
         }
 
         if (!_checkpoints.TryGetValue(player.SteamID, out var saved) || saved.Count <= number)
         {
-            if (!silent) player.PrintToChat(number > 0
+            player.PrintToChat(number > 0
                 ? $"\x02[检查点] 第 {number} 个检查点不存在。"
                 : "\x02[检查点] 没有检查点，请先使用 !cp。");
             return;
@@ -316,13 +402,13 @@ public sealed class MovementHudPlugin : BasePlugin
         var index = saved.Count - 1 - number;
         if (index < 0)
         {
-            if (!silent) player.PrintToChat($"\x02[检查点] 第 {number} 个回溯点不存在。");
+            player.PrintToChat($"\x02[检查点] 第 {number} 个回溯点不存在。");
             return;
         }
 
         var checkpoint = saved[index];
         pawn.Teleport(checkpoint.Position, checkpoint.Angles, checkpoint.Velocity);
-        if (!silent) player.PrintToChat("\x04[检查点] 读点成功");
+        player.PrintToChat("\x04[检查点] 读点成功");
     }
 
     private static bool TryGetCheckpointPawn(CCSPlayerController player, out CCSPlayerPawn pawn)
