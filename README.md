@@ -1,34 +1,35 @@
-# 移动 HUD 与检查点插件
+# Movement HUD and Checkpoints
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat)](http://choosealicense.com/licenses/mit/)<br>
-适用于 CS2 的 MG、Surf、BHOP 服务器，基于 [CounterStrikeSharp](https://github.com/roflmuffin/counterstrikesharp)。
+A [CounterStrikeSharp](https://github.com/roflmuffin/counterstrikesharp) plugin for CS2 MG, Surf, and BHOP servers.
 
 ## HUD
 
-![alt text](image.png)
-- 显示玩家速度和 A/W/S/D/C/Jump 按键状态。
-- 观察其他玩家时显示其速度和按键状态。
-- `!panel`、`/panel` 或控制台命令 `css_panel` 可切换 HUD。
+![Movement HUD preview](image.png)
 
-## 检查点
+- Displays player speed and A/W/S/D/C/Jump key states.
+- Shows the observed player's speed and key states while spectating.
+- Toggle the HUD with `!panel`, `/panel`, or the console command `css_panel`.
 
-- `!cp` 保存检查点；最多保存最近 4 个。
-- `!tp` 回到最新检查点，`!tp1` 回到上一个，`!tp2` 回到再上一个。
-- 支持 `/`、`.` 和 `!!` 前缀；控制台命令为 `css_cp`、`css_tp`、`css_tp1`、`css_tp2`。
-- `!!cp`、`!!tp`、`!!tp1`、`!!tp2` 和 `!!panel` 仍会向本人显示操作结果或失败提示，指令内容不会作为聊天发出。
-- 所有命令的成功和失败提示均仅本人可见，包括 `!`、`/`、`.`、`!!` 前缀及控制台调用。
-- 检查点保存位置、视角和速度。
-- 只有存活且未进入观察状态时才能存点或读点；失败提示为红色。
+## Checkpoints
 
-## 隐藏腿
+- `!cp` saves a checkpoint. The four most recent checkpoints are kept.
+- `!tp` returns to the latest checkpoint, `!tp1` to the previous one, and `!tp2` to the one before that.
+- Also supports `/`, `.`, and `!!` prefixes. Console commands: `css_cp`, `css_tp`, `css_tp1`, and `css_tp2`.
+- `!!cp`, `!!tp`, `!!tp1`, `!!tp2`, and `!!panel` show success or error feedback without posting the command in chat.
+- All command feedback is visible only to the caller, including commands entered with `!`, `/`, `.`, `!!`, or through the console.
+- Checkpoints store position, view angles, and velocity.
+- Saving and teleporting require the player to be alive and not spectating. Error messages appear in red.
 
-- `!hidelegs`、`/hidelegs`、`.hidelegs`、`!!hidelegs` 或控制台命令 `css_hidelegs` 可切换第一人称腿部显示。
-- `!!hidelegs` 会向本人显示切换结果，指令内容不会作为聊天发出。
-- 按 SteamID 将设置自动保存到插件目录的 `movementhud-hidelegs.json`；重连、重生、换图或服务器重启后仍会保持隐藏。
-- 再次执行可恢复显示并保存；死亡或观察时也可修改设置，下次存活时生效。
+## Hide Legs
 
-## 移动速度
+- Toggle first-person leg visibility with `!hidelegs`, `/hidelegs`, `.hidelegs`, `!!hidelegs`, or the console command `css_hidelegs`.
+- `!!hidelegs` shows feedback only to the caller without posting the command in chat.
+- Settings are saved by SteamID in `movementhud-hidelegs.json` in the plugin directory and persist across reconnects, respawns, map changes, and server restarts.
+- Run the command again to show your legs and update the saved setting. You can also toggle it while dead or spectating; the setting takes effect when you are alive again.
 
-首次加载会生成 `movementhud.json`，用于设置地速数值：
+## Movement Speed
+
+On first load, the plugin creates `movementhud.json` to configure movement speed:
 
 ```json
 {
@@ -36,15 +37,15 @@
 }
 ```
 
-- `MaxSpeed`：启用自定义武器地速时使用的速度，默认 `260`。
+- `MaxSpeed`: the weapon movement speed limit used when custom speed is enabled. Default: `260`.
 
-游戏可控制的开关可在服务器控制台或 `server.cfg` 设置：
+Set the following options in the server console or `server.cfg`:
 
-- `mh_speed 1`：启用自定义武器地速，默认开启；设为 `0` 恢复原版武器限速。
-- `mh_checkpoints 1`：启用存点和读点命令，默认开启；设为 `0` 禁用这些命令。
+- `mh_speed 1`: enables custom weapon movement speed (default). Set to `0` to restore the original weapon speed limits.
+- `mh_checkpoints 1`: enables checkpoint saving and teleporting (default). Set to `0` to disable these commands.
 
-修改 `MaxSpeed` 后，从服务器控制台执行 `css_movementhud_reload` 重载文件配置。
+After changing `MaxSpeed`, run `css_movementhud_reload` from the server console to reload the configuration.
 
-## 编译与安装
+## Build and Install
 
-运行 `dotnet publish -c Release`，将 `bin/Release/net8.0/publish/MovementHud.dll` 放入 `game/csgo/addons/counterstrikesharp/plugins/MovementHud/`，然后重启服务器或加载插件。
+Run `dotnet publish -c Release`, copy `bin/Release/net8.0/publish/MovementHud.dll` to `game/csgo/addons/counterstrikesharp/plugins/MovementHud/`, then restart the server or load the plugin.
