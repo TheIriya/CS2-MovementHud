@@ -4,7 +4,7 @@ A [CounterStrikeSharp](https://github.com/roflmuffin/counterstrikesharp) plugin 
 
 ## HUD
 
-![Movement HUD preview](image.png)
+![Movement HUD preview](images/image.png)
 
 - Displays player speed and A/W/S/D/C/Jump key states.
 - Shows the observed player's speed and key states while spectating.
