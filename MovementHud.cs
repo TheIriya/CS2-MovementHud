@@ -17,7 +17,7 @@ public sealed class MovementHudConfig
     public float MaxSpeed { get; set; } = 260.0f;
 }
 
-public sealed partial class MovementHudPlugin : BasePlugin
+public sealed class MovementHudPlugin : BasePlugin
 {
     private const int HudUpdateIntervalTicks = 6;
     private const int MaxCheckpoints = 4;
@@ -39,7 +39,7 @@ public sealed partial class MovementHudPlugin : BasePlugin
     private string HiddenLegsPath => Path.Combine(ModuleDirectory, "movementhud-hidelegs.json");
 
     public override string ModuleName => "Movement HUD and Checkpoint";
-    public override string ModuleVersion => "1.5.0";
+    public override string ModuleVersion => "1.4.1";
     public override string ModuleAuthor => "TheIriya";
     public override string ModuleDescription => "Speed, key press HUD, and checkpoint plugin";
 
@@ -48,7 +48,6 @@ public sealed partial class MovementHudPlugin : BasePlugin
         LoadConfig();
         LoadHiddenLegs();
         RegisterFakeConVars(this);
-        RegisterPlayerProtection();
         RegisterListener<Listeners.OnTick>(OnTick);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
         RegisterListener<Listeners.OnMapEnd>(RestoreWeaponSpeeds);

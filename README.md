@@ -27,22 +27,6 @@ A [CounterStrikeSharp](https://github.com/roflmuffin/counterstrikesharp) plugin 
 - Settings are saved by SteamID in `movementhud-hidelegs.json` in the plugin directory and persist across reconnects, respawns, map changes, and server restarts.
 - Run the command again to show your legs and update the saved setting. You can also toggle it while dead or spectating; the setting takes effect when you are alive again.
 
-## Player Damage Protection
-
-Four independent server options control immunity to player attacks. All default to `1` (immunity enabled). Set an option to `0` to restore that attack type. Changes take effect immediately without reloading the plugin.
-
-| Option | Blocks when set to `1` |
-| --- | --- |
-| `mh_block_knife` | Player knife damage |
-| `mh_block_bullets` | Player bullet and shotgun damage |
-| `mh_block_grenades` | Player grenade damage, including HE explosions, Molotov/incendiary fire, and grenade impacts |
-| `mh_block_flash` | Blindness from player-thrown flashbangs |
-
-- Protects both T and CT players, including attacks from teammates, enemies, and their own grenades or flashes.
-- Checks the actual damage source and grenade thrower/owner. Map `trigger_hurt`, map explosions, falling, drowning, and other environmental damage still work, even when a map entity credits a player as the attacker.
-- Map-generated flashes without a player thrower remain effective.
-- Set these options in the server console, `server.cfg`, or a map-specific configuration. For example, `mh_block_bullets 0` allows player gunfire while keeping the other protections enabled.
-
 ## Movement Speed
 
 On first load, the plugin creates `movementhud.json` to configure movement speed:
