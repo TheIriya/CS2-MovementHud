@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Commands;
@@ -15,6 +16,15 @@ namespace MovementHud;
 public sealed class MovementHudConfig
 {
     public float MaxSpeed { get; set; } = 260.0f;
+    public bool EnableSpeed { get; set; } = true;
+    public bool EnableCheckpoints { get; set; } = true;
+    public bool EnableHud { get; set; } = true;
+    public bool EnableSharpTimerGuard { get; set; } = true;
+    public bool RequireCrouchForCrouchedCheckpoint { get; set; } = true;
+    public bool BlockPlayerKnife { get; set; } = true;
+    public bool BlockPlayerBullets { get; set; } = true;
+    public bool BlockPlayerGrenades { get; set; } = true;
+    public bool BlockPlayerFlash { get; set; } = true;
 }
 
 public sealed partial class MovementHudPlugin : BasePlugin
@@ -34,12 +44,18 @@ public sealed partial class MovementHudPlugin : BasePlugin
         "mh_speed", "Enable the configured weapon movement speed", true);
     public FakeConVar<bool> EnableCheckpoints = new(
         "mh_checkpoints", "Enable checkpoint save and teleport commands", true);
+    public FakeConVar<bool> EnableHud = new(
+        "mh_hud", "Enable HUD display for all players (players can also use !panel)", true);
+    public FakeConVar<bool> EnableSharpTimerGuard = new(
+        "mh_sharptimer_guard", "Invalidate checkpoint-assisted SharpTimer runs and recover at start zones", true);
+    public FakeConVar<bool> RequireCrouchedTeleport = new(
+        "mh_checkpoint_crouch", "Require the same crouching or standing posture as the saved checkpoint", true);
 
     private string ConfigPath => Path.Combine(ModuleDirectory, "movementhud.json");
     private string HiddenLegsPath => Path.Combine(ModuleDirectory, "movementhud-hidelegs.json");
 
     public override string ModuleName => "Movement HUD and Checkpoint";
-    public override string ModuleVersion => "1.5.0";
+    public override string ModuleVersion => "1.6.3";
     public override string ModuleAuthor => "TheIriya";
     public override string ModuleDescription => "Speed, key press HUD, and checkpoint plugin";
 
@@ -48,10 +64,13 @@ public sealed partial class MovementHudPlugin : BasePlugin
         LoadConfig();
         LoadHiddenLegs();
         RegisterFakeConVars(this);
+        EnableSharpTimerGuard.ValueChanged += OnSharpTimerGuardChanged;
         RegisterPlayerProtection();
         RegisterListener<Listeners.OnTick>(OnTick);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
         RegisterListener<Listeners.OnMapEnd>(RestoreWeaponSpeeds);
+        RegisterListener<Listeners.OnMapEnd>(ClearSharpTimerRecoveries);
+        HookEntityOutput("trigger_multiple", "OnStartTouch", OnSharpTimerStartTouch, HookMode.Post);
         AddCommand("css_cp", "保存检查点", (player, command) => OnPlayerCommand(player, command, "cp"));
         AddCommand("css_tp", "读取最近检查点", (player, command) => OnPlayerCommand(player, command, "tp"));
         AddCommand("css_tp1", "读取上一个检查点", (player, command) => OnPlayerCommand(player, command, "tp1"));
@@ -66,6 +85,8 @@ public sealed partial class MovementHudPlugin : BasePlugin
 
     public override void Unload(bool hotReload)
     {
+        EnableSharpTimerGuard.ValueChanged -= OnSharpTimerGuardChanged;
+        ClearSharpTimerRecoveries();
         RestoreWeaponSpeeds();
         foreach (var player in Utilities.GetPlayers())
         {
@@ -77,6 +98,7 @@ public sealed partial class MovementHudPlugin : BasePlugin
     private void OnTick()
     {
         _tick++;
+        UpdateSharpTimerRecoveries();
 
         foreach (var player in Utilities.GetPlayers())
         {
@@ -87,7 +109,7 @@ public sealed partial class MovementHudPlugin : BasePlugin
             if (_legsHidden.Contains(player.SteamID))
                 ApplyLegVisibility(player, true);
 
-            if (_hudDisabled.Contains(player.SteamID))
+            if (!EnableHud.Value || _hudDisabled.Contains(player.SteamID))
                 continue;
 
             var subject = GetObservedPlayer(player) ?? player;
@@ -127,18 +149,57 @@ public sealed partial class MovementHudPlugin : BasePlugin
     {
         Directory.CreateDirectory(ModuleDirectory);
         if (!File.Exists(ConfigPath))
-            File.WriteAllText(ConfigPath, "{\n  \"MaxSpeed\": 260\n}\n");
+            File.WriteAllText(ConfigPath, JsonSerializer.Serialize(new MovementHudConfig(), new JsonSerializerOptions { WriteIndented = true }) + "\n");
 
         try
         {
             _config = JsonSerializer.Deserialize<MovementHudConfig>(File.ReadAllText(ConfigPath)) ?? new();
             if (!float.IsFinite(_config.MaxSpeed) || _config.MaxSpeed <= 0)
                 _config.MaxSpeed = 260.0f;
+
+            // Add new options to existing configs without losing user values or unknown keys.
+            var document = JsonNode.Parse(File.ReadAllText(ConfigPath)) as JsonObject;
+            var defaults = JsonSerializer.SerializeToNode(new MovementHudConfig())!.AsObject();
+            var updated = false;
+            if (document is not null)
+            {
+                foreach (var setting in defaults)
+                    if (!document.ContainsKey(setting.Key))
+                    {
+                        document[setting.Key] = setting.Value?.DeepClone();
+                        updated = true;
+                    }
+                if (updated)
+                {
+                    try
+                    {
+                        File.WriteAllText(ConfigPath, document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n");
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        Logger.LogWarning(ex, "无法向配置文件补齐新选项，继续使用已读取的配置：{Path}", ConfigPath);
+                    }
+                }
+            }
         }
         catch
         {
             _config = new();
         }
+        ApplyConfigDefaults();
+    }
+
+    private void ApplyConfigDefaults()
+    {
+        Enable260Speed.Value = _config.EnableSpeed;
+        EnableCheckpoints.Value = _config.EnableCheckpoints;
+        EnableHud.Value = _config.EnableHud;
+        EnableSharpTimerGuard.Value = _config.EnableSharpTimerGuard;
+        RequireCrouchedTeleport.Value = _config.RequireCrouchForCrouchedCheckpoint;
+        BlockPlayerKnife.Value = _config.BlockPlayerKnife;
+        BlockPlayerBullets.Value = _config.BlockPlayerBullets;
+        BlockPlayerGrenades.Value = _config.BlockPlayerGrenades;
+        BlockPlayerFlash.Value = _config.BlockPlayerFlash;
     }
 
     private void ReloadConfigCommand(CCSPlayerController? player, CommandInfo command)
@@ -271,6 +332,11 @@ public sealed partial class MovementHudPlugin : BasePlugin
 
     private void ToggleHud(CCSPlayerController player)
     {
+        if (!EnableHud.Value)
+        {
+            player.PrintToChat("\x02[HUD] 服务器已关闭 HUD 显示。");
+            return;
+        }
         var enabled = _hudDisabled.Remove(player.SteamID);
         player.PrintToChat(enabled ? "\x04[HUD] 已开启" : "\x04[HUD] 已关闭");
         if (!enabled)
@@ -374,7 +440,8 @@ public sealed partial class MovementHudPlugin : BasePlugin
         saved.Add(new Checkpoint(
             new Vector3(origin.X, origin.Y, origin.Z),
             new Vector3(rotation.X, rotation.Y, rotation.Z),
-            new Vector3(velocity.X, velocity.Y, velocity.Z)));
+            new Vector3(velocity.X, velocity.Y, velocity.Z),
+            IsCrouched(pawn)));
         player.PrintToChat("\x04[检查点] 存点成功");
     }
 
@@ -408,8 +475,22 @@ public sealed partial class MovementHudPlugin : BasePlugin
         }
 
         var checkpoint = saved[index];
+        if (RequireCrouchedTeleport.Value && checkpoint.Crouched != IsCrouched(pawn))
+        {
+            player.PrintToChat(checkpoint.Crouched
+                ? "\x02[检查点] 此检查点是在蹲下时保存的，请蹲下后再读点。"
+                : "\x02[检查点] 此检查点是在站立时保存的，请站起来后再读点。");
+            return;
+        }
+        var timerStopped = false;
+        // Keep the API call behind the switch so disabled servers need no SharpTimer API.
+        if (EnableSharpTimerGuard.Value && !PrepareSharpTimerForTeleport(player, out timerStopped))
+            return;
+
         pawn.Teleport(checkpoint.Position, checkpoint.Angles, checkpoint.Velocity);
-        player.PrintToChat("\x04[检查点] 读点成功");
+        player.PrintToChat(timerStopped
+            ? "\x04[检查点] 读点成功，本次计时已作废，回到起点后可重新计时。"
+            : "\x04[检查点] 读点成功");
     }
 
     private static bool TryGetCheckpointPawn(CCSPlayerController player, out CCSPlayerPawn pawn)
@@ -425,6 +506,7 @@ public sealed partial class MovementHudPlugin : BasePlugin
 
     private void OnClientDisconnect(int slot)
     {
+        _timerRecoveries.Remove(slot);
         var player = Utilities.GetPlayerFromSlot(slot);
         if (player is null)
             return;
@@ -451,5 +533,8 @@ public sealed partial class MovementHudPlugin : BasePlugin
         ? $"<font color='#55d889'><b>{label}</b></font>"
         : $"<font color='#6d777c'>{label}</font>";
 
-    private sealed record Checkpoint(Vector3 Position, Vector3 Angles, Vector3 Velocity);
+    private static bool IsCrouched(CCSPlayerPawn pawn) =>
+        ((PlayerFlags)pawn.Flags & PlayerFlags.FL_DUCKING) != 0;
+
+    private sealed record Checkpoint(Vector3 Position, Vector3 Angles, Vector3 Velocity, bool Crouched);
 }

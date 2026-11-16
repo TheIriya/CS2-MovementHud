@@ -9,6 +9,7 @@ A [CounterStrikeSharp](https://github.com/roflmuffin/counterstrikesharp) plugin 
 - Displays player speed and A/W/S/D/C/Jump key states.
 - Shows the observed player's speed and key states while spectating.
 - Toggle the HUD with `!panel`, `/panel`, or the console command `css_panel`.
+- `mh_hud 0` disables the HUD server-wide. Players cannot override this with `!panel`; their personal preference is retained when it is enabled again.
 
 ## Checkpoints
 
@@ -17,8 +18,20 @@ A [CounterStrikeSharp](https://github.com/roflmuffin/counterstrikesharp) plugin 
 - Also supports `/`, `.`, and `!!` prefixes. Console commands: `css_cp`, `css_tp`, `css_tp1`, and `css_tp2`.
 - `!!cp`, `!!tp`, `!!tp1`, `!!tp2`, and `!!panel` show success or error feedback without posting the command in chat.
 - All command feedback is visible only to the caller, including commands entered with `!`, `/`, `.`, `!!`, or through the console.
-- Checkpoints store position, view angles, and velocity.
+- Checkpoints store position, view angles, velocity, and whether the player was crouched.
+- With `mh_checkpoint_crouch 1` (default), the player's posture must match the saved checkpoint: crouched checkpoints can only be loaded while crouching, and standing checkpoints can only be loaded while standing. Set it to `0` to disable both checks. Rejected teleports do not change timing.
 - Saving and teleporting require the player to be alive and not spectating. Error messages appear in red.
+
+### SharpTimer Integration
+
+- Uses [SharpTimer/SharpTimer](https://github.com/SharpTimer/SharpTimer)'s `SharpTimerAPI` (`sharptimer:manager`).
+- Controlled by `mh_sharptimer_guard` (default `1`). Set it to `0` to allow checkpoint teleports without touching SharpTimer or requiring its API. Disabling it also releases any temporary timer blocks created by MovementHud; cancelled runs remain cancelled.
+- Before `tp`, `tp1`, or `tp2` teleports a player, timing is disabled through the API and checked again. This cancels main and bonus runs so the checkpoint-assisted run cannot finish, enter rankings, or be saved to the database. All supported chat prefixes and console commands use the same check.
+- Saving a checkpoint with `cp` or requesting a nonexistent checkpoint does not affect timing. Already-disabled timing stays disabled.
+- If the API is unavailable or SharpTimer ignores the toggle during command cooldown/replay, the teleport is cancelled. Retry after the cooldown ends.
+- Returning to a main or bonus start zone automatically restores timing; leaving it starts a fresh run without `!r`. Teleporting straight to a finish still cannot save a result. Manually disabled timing stays disabled.
+- Automatic recovery uses SharpTimer's public player state because the API's enable operation also respawns the player. Custom start triggers and configured coordinate zones are recognized by SharpTimer itself. If that state is incompatible, checkpoint teleporting is rejected.
+- Install the **shared API supplied with your SharpTimer version** at `game/csgo/addons/counterstrikesharp/shared/SharpTimerAPI/SharpTimerAPI.dll`. Keep that shared DLL out of the MovementHud plugin directory.
 
 ## Hide Legs
 
@@ -45,23 +58,47 @@ Four independent server options provide immunity to player attacks. All default 
 
 ## Movement Speed
 
-On first load, the plugin creates `movementhud.json` to configure movement speed:
+`MaxSpeed` in `movementhud.json` sets the custom weapon movement speed limit (default `260`). Use `mh_speed 0` to restore the original weapon speed limits.
+
+## Configuration
+
+On first load, the plugin creates `movementhud.json` in its plugin directory. Existing files receive missing options automatically while retaining their current values:
 
 ```json
 {
-  "MaxSpeed": 260
+  "MaxSpeed": 260,
+  "EnableSpeed": true,
+  "EnableCheckpoints": true,
+  "EnableHud": true,
+  "EnableSharpTimerGuard": true,
+  "RequireCrouchForCrouchedCheckpoint": true,
+  "BlockPlayerKnife": true,
+  "BlockPlayerBullets": true,
+  "BlockPlayerGrenades": true,
+  "BlockPlayerFlash": true
 }
 ```
 
-- `MaxSpeed`: the weapon movement speed limit used when custom speed is enabled. Default: `260`.
+JSON values provide the startup defaults. Server console/RCON, `server.cfg`, and map configurations can override the switches immediately with `0` or `1`, without writing to the JSON file.
 
-Set the following options in the server console or `server.cfg`:
+| JSON default | Server option | Enabled behavior |
+| --- | --- | --- |
+| `EnableSpeed` | `mh_speed` | Use custom weapon movement speed |
+| `EnableCheckpoints` | `mh_checkpoints` | Allow checkpoint save/teleport commands |
+| `EnableHud` | `mh_hud` | Allow HUD display |
+| `EnableSharpTimerGuard` | `mh_sharptimer_guard` | Cancel checkpoint-assisted runs and restore timing at a start zone |
+| `RequireCrouchForCrouchedCheckpoint` | `mh_checkpoint_crouch` | Require the saved crouching/standing posture when loading a checkpoint |
+| `BlockPlayerKnife` | `mh_block_knife` | Block player knife damage |
+| `BlockPlayerBullets` | `mh_block_bullets` | Block player bullet/Zeus damage |
+| `BlockPlayerGrenades` | `mh_block_grenades` | Block player grenade/fire damage |
+| `BlockPlayerFlash` | `mh_block_flash` | Block player flashbang blindness |
 
-- `mh_speed 1`: enables custom weapon movement speed (default). Set to `0` to restore the original weapon speed limits.
-- `mh_checkpoints 1`: enables checkpoint saving and teleporting (default). Set to `0` to disable these commands.
-
-After changing `MaxSpeed`, run `css_movementhud_reload` from the server console to reload the configuration.
+Run `css_movementhud_reload` from the server console after editing the JSON file. Reloading applies `MaxSpeed` and resets every switch to its configured default, replacing current console/map overrides. Restarting/reloading the plugin also applies those defaults; later server/map commands can override them again.
 
 ## Build and Install
 
 Run `dotnet publish -c Release`, copy `bin/Release/net8.0/publish/MovementHud.dll` to `game/csgo/addons/counterstrikesharp/plugins/MovementHud/`, then restart the server or load the plugin.
+
+The build uses the official .NET 8 SharpTimer API reference in `lib/SharpTimerAPI/`; it is not copied into the plugin output. See its README for source and license details. At runtime, use the shared API installed with SharpTimer.
+
+Run `dotnet run --project tests/MovementHud.Tests -c Release` to check the checkpoint timer guard without a game server.

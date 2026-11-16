@@ -9,5 +9,11 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CounterStrikeSharp.API" Version="1.0.357" />
+    <Reference Include="SharpTimerAPI">
+      <HintPath>lib/SharpTimerAPI/SharpTimerAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Compile Remove="tests/**/*.cs" />
+    <InternalsVisibleTo Include="MovementHud.Tests" />
   </ItemGroup>
 </Project>
