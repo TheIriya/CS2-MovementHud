@@ -15,6 +15,10 @@ namespace MovementHud;
 
 public sealed class MovementHudConfig
 {
+    internal const string DefaultCheckpointSound = "sounds/ui/buttonclick.vsnd";
+    internal const string DefaultCheckpointErrorSound = "sounds/ui/weapon_cant_buy.vsnd";
+    internal const string DefaultTeleportSound = "sounds/buttons/blip1.vsnd";
+
     public float MaxSpeed { get; set; } = 260.0f;
     public bool EnableSpeed { get; set; } = true;
     public bool EnableCheckpoints { get; set; } = true;
@@ -25,6 +29,9 @@ public sealed class MovementHudConfig
     public bool BlockPlayerBullets { get; set; } = true;
     public bool BlockPlayerGrenades { get; set; } = true;
     public bool BlockPlayerFlash { get; set; } = true;
+    public string CheckpointSound { get; set; } = DefaultCheckpointSound;
+    public string CheckpointErrorSound { get; set; } = DefaultCheckpointErrorSound;
+    public string TeleportSound { get; set; } = DefaultTeleportSound;
 }
 
 public sealed partial class MovementHudPlugin : BasePlugin
@@ -50,12 +57,18 @@ public sealed partial class MovementHudPlugin : BasePlugin
         "mh_sharptimer_guard", "Invalidate checkpoint-assisted SharpTimer runs and recover at start zones", true);
     public FakeConVar<bool> RequireCrouchedTeleport = new(
         "mh_checkpoint_crouch", "Require the same crouching or standing posture as the saved checkpoint", true);
+    public FakeConVar<string> CheckpointSound = new(
+        "mh_sound_checkpoint", "Sound played when a checkpoint is saved", MovementHudConfig.DefaultCheckpointSound);
+    public FakeConVar<string> CheckpointErrorSound = new(
+        "mh_sound_checkpoint_error", "Sound played when a checkpoint command fails", MovementHudConfig.DefaultCheckpointErrorSound);
+    public FakeConVar<string> TeleportSound = new(
+        "mh_sound_teleport", "Sound played after teleporting to a checkpoint", MovementHudConfig.DefaultTeleportSound);
 
     private string ConfigPath => Path.Combine(ModuleDirectory, "movementhud.json");
     private string HiddenLegsPath => Path.Combine(ModuleDirectory, "movementhud-hidelegs.json");
 
     public override string ModuleName => "Movement HUD and Checkpoint";
-    public override string ModuleVersion => "1.6.3";
+    public override string ModuleVersion => "1.6.4";
     public override string ModuleAuthor => "TheIriya";
     public override string ModuleDescription => "Speed, key press HUD, and checkpoint plugin";
 
@@ -200,6 +213,9 @@ public sealed partial class MovementHudPlugin : BasePlugin
         BlockPlayerBullets.Value = _config.BlockPlayerBullets;
         BlockPlayerGrenades.Value = _config.BlockPlayerGrenades;
         BlockPlayerFlash.Value = _config.BlockPlayerFlash;
+        CheckpointSound.Value = _config.CheckpointSound ?? MovementHudConfig.DefaultCheckpointSound;
+        CheckpointErrorSound.Value = _config.CheckpointErrorSound ?? MovementHudConfig.DefaultCheckpointErrorSound;
+        TeleportSound.Value = _config.TeleportSound ?? MovementHudConfig.DefaultTeleportSound;
     }
 
     private void ReloadConfigCommand(CCSPlayerController? player, CommandInfo command)
@@ -413,13 +429,13 @@ public sealed partial class MovementHudPlugin : BasePlugin
     {
         if (!EnableCheckpoints.Value)
         {
-            player.PrintToChat("\x02[检查点] 此地图不能使用存点功能。");
+            ReportCheckpointError(player, "\x02[检查点] 此地图不能使用存点功能。");
             return;
         }
 
         if (!TryGetCheckpointPawn(player, out var pawn))
         {
-            player.PrintToChat("\x02[检查点] 只有存活状态才能存点。");
+            ReportCheckpointError(player, "\x02[检查点] 只有存活状态才能存点。");
             return;
         }
 
@@ -428,7 +444,7 @@ public sealed partial class MovementHudPlugin : BasePlugin
         var velocity = pawn.AbsVelocity;
         if (origin is null || rotation is null || velocity is null)
         {
-            player.PrintToChat("\x02[检查点] 无法读取当前位置。");
+            ReportCheckpointError(player, "\x02[检查点] 无法读取当前位置。");
             return;
         }
 
@@ -443,25 +459,26 @@ public sealed partial class MovementHudPlugin : BasePlugin
             new Vector3(velocity.X, velocity.Y, velocity.Z),
             IsCrouched(pawn)));
         player.PrintToChat("\x04[检查点] 存点成功");
+        PlayCheckpointSound(player, CheckpointSound.Value);
     }
 
     private void TeleportCheckpoint(CCSPlayerController player, int number = 0)
     {
         if (!EnableCheckpoints.Value)
         {
-            player.PrintToChat("\x02[检查点] 此地图不能使用存点功能。");
+            ReportCheckpointError(player, "\x02[检查点] 此地图不能使用存点功能。");
             return;
         }
 
         if (!TryGetCheckpointPawn(player, out var pawn))
         {
-            player.PrintToChat("\x02[检查点] 只有存活状态才能读点。");
+            ReportCheckpointError(player, "\x02[检查点] 只有存活状态才能读点。");
             return;
         }
 
         if (!_checkpoints.TryGetValue(player.SteamID, out var saved) || saved.Count <= number)
         {
-            player.PrintToChat(number > 0
+            ReportCheckpointError(player, number > 0
                 ? $"\x02[检查点] 第 {number} 个检查点不存在。"
                 : "\x02[检查点] 没有检查点，请先使用 !cp。");
             return;
@@ -470,14 +487,14 @@ public sealed partial class MovementHudPlugin : BasePlugin
         var index = saved.Count - 1 - number;
         if (index < 0)
         {
-            player.PrintToChat($"\x02[检查点] 第 {number} 个回溯点不存在。");
+            ReportCheckpointError(player, $"\x02[检查点] 第 {number} 个回溯点不存在。");
             return;
         }
 
         var checkpoint = saved[index];
         if (RequireCrouchedTeleport.Value && checkpoint.Crouched != IsCrouched(pawn))
         {
-            player.PrintToChat(checkpoint.Crouched
+            ReportCheckpointError(player, checkpoint.Crouched
                 ? "\x02[检查点] 此检查点是在蹲下时保存的，请蹲下后再读点。"
                 : "\x02[检查点] 此检查点是在站立时保存的，请站起来后再读点。");
             return;
@@ -485,12 +502,31 @@ public sealed partial class MovementHudPlugin : BasePlugin
         var timerStopped = false;
         // Keep the API call behind the switch so disabled servers need no SharpTimer API.
         if (EnableSharpTimerGuard.Value && !PrepareSharpTimerForTeleport(player, out timerStopped))
+        {
+            PlayCheckpointSound(player, CheckpointErrorSound.Value);
             return;
+        }
 
         pawn.Teleport(checkpoint.Position, checkpoint.Angles, checkpoint.Velocity);
         player.PrintToChat(timerStopped
             ? "\x04[检查点] 读点成功，本次计时已作废，回到起点后可重新计时。"
             : "\x04[检查点] 读点成功");
+        PlayCheckpointSound(player, TeleportSound.Value);
+    }
+
+    private void ReportCheckpointError(CCSPlayerController player, string message)
+    {
+        player.PrintToChat(message);
+        PlayCheckpointSound(player, CheckpointErrorSound.Value);
+    }
+
+    private static void PlayCheckpointSound(CCSPlayerController player, string sound)
+    {
+        if (!IsUsable(player) || player.IsBot || string.IsNullOrWhiteSpace(sound) ||
+            sound.IndexOfAny(['"', '\\', ';', '\r', '\n', '\0']) >= 0)
+            return;
+
+        player.ExecuteClientCommand($"play \"{sound}\"");
     }
 
     private static bool TryGetCheckpointPawn(CCSPlayerController player, out CCSPlayerPawn pawn)

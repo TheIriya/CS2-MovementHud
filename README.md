@@ -75,7 +75,10 @@ On first load, the plugin creates `movementhud.json` in its plugin directory. Ex
   "BlockPlayerKnife": true,
   "BlockPlayerBullets": true,
   "BlockPlayerGrenades": true,
-  "BlockPlayerFlash": true
+  "BlockPlayerFlash": true,
+  "CheckpointSound": "sounds/ui/buttonclick.vsnd",
+  "CheckpointErrorSound": "sounds/ui/weapon_cant_buy.vsnd",
+  "TeleportSound": "sounds/buttons/blip1.vsnd"
 }
 ```
 
@@ -93,7 +96,11 @@ JSON values provide the startup defaults. Server console/RCON, `server.cfg`, and
 | `BlockPlayerGrenades` | `mh_block_grenades` | Block player grenade/fire damage |
 | `BlockPlayerFlash` | `mh_block_flash` | Block player flashbang blindness |
 
-Run `css_movementhud_reload` from the server console after editing the JSON file. Reloading applies `MaxSpeed` and resets every switch to its configured default, replacing current console/map overrides. Restarting/reloading the plugin also applies those defaults; later server/map commands can override them again.
+Run `css_movementhud_reload` from the server console after editing the JSON file. Reloading applies `MaxSpeed`, the switches, and the sound paths from the JSON file. Restarting the plugin also applies those defaults. Server and map commands can override them at runtime.
+
+### Checkpoint sounds
+
+The plugin plays a sound for the player who saves a checkpoint, fails a checkpoint command, or teleports to a checkpoint. Set the sound paths in `movementhud.json` and use `""` to mute an individual sound. For server or map overrides, use `mh_sound_checkpoint`, `mh_sound_checkpoint_error`, and `mh_sound_teleport`. To load the sample overrides, copy the file into the server's `game/csgo/cfg/` directory and run `exec movementhud.cfg` from the server console or `server.cfg`. [Sample movementhud.cfg](cfg/movementhud.cfg)
 
 ## Build and Install
 
